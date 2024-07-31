@@ -5,22 +5,23 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
+from transformers import BertForQuestionAnswering, BertTokenizer
+import torch
 
-# Data Sourcing
+#  Data Sourcing
 def scrape_pratham():
     url = "https://www.pratham.org"
     response = requests.get(url)
     soup = BeautifulSoup(response.text, 'html.parser')
     
     # Extract relevant information
-    # Note: You may need to adjust the selectors based on the actual structure of pratham.org
-    articles = soup.find_all('article')
+    # Adjust these selectors based on the actual structure of pratham.org
+    articles = soup.find_all('div', class_='content-wrapper')
     
     data = []
     for article in articles:
-        title = article.find('h2').text.strip()
-        content = article.find('div', class_='content').text.strip()
+        title = article.find('h2').text.strip() if article.find('h2') else "No Title"
+        content = article.find('div', class_='field-item').text.strip() if article.find('div', class_='field-item') else "No Content"
         data.append({'title': title, 'content': content})
     
     # Save to CSV
@@ -29,11 +30,11 @@ def scrape_pratham():
         writer.writeheader()
         writer.writerows(data)
 
-# Knowledge Base
+#  Knowledge Base
 def process_data():
-    nltk.download('punkt')
-    nltk.download('stopwords')
-    nltk.download('wordnet')
+    nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
+    nltk.download('wordnet', quiet=True)
 
     stop_words = set(stopwords.words('english'))
     lemmatizer = WordNetLemmatizer()
@@ -56,15 +57,14 @@ def process_data():
     with open('processed_pratham_data.csv', 'w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=['title', 'content', 'keywords'])
         writer.writeheader()
-        writer.writerows(processed_data)
+        writer.writerows(data)
 
-#  Q&A Bot
+# Q&A Bot
 class PrathamBot:
     def __init__(self):
-        model_name = "distilbert-base-cased-distilled-squad"
-        model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.nlp = pipeline('question-answering', model=model, tokenizer=tokenizer)
+        self.model_name = "bert-large-uncased-whole-word-masking-finetuned-squad"
+        self.model = BertForQuestionAnswering.from_pretrained(self.model_name)
+        self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
         self.knowledge_base = self.load_knowledge_base()
 
     def load_knowledge_base(self):
@@ -76,10 +76,20 @@ class PrathamBot:
         return knowledge_base
 
     def answer_question(self, question):
-        result = self.nlp(question=question, context=self.knowledge_base)
-        return result['answer']
+        inputs = self.tokenizer.encode_plus(question, self.knowledge_base, add_special_tokens=True, return_tensors="pt")
+        input_ids = inputs["input_ids"].tolist()[0]
 
-# Evaluation
+        text_tokens = self.tokenizer.convert_ids_to_tokens(input_ids)
+        answer_start_scores, answer_end_scores = self.model(**inputs, return_dict=False)
+
+        answer_start = torch.argmax(answer_start_scores)
+        answer_end = torch.argmax(answer_end_scores) + 1
+
+        answer = self.tokenizer.convert_tokens_to_string(self.tokenizer.convert_ids_to_tokens(input_ids[answer_start:answer_end]))
+
+        return answer
+
+# Checker
 def evaluate_bot():
     bot = PrathamBot()
     questions = [
@@ -101,6 +111,9 @@ def evaluate_bot():
     print("Note: Please record a video of this output on your local machine.")
 
 if __name__ == "__main__":
+    print("Scraping Pratham.org...")
     scrape_pratham()
+    print("Processing data...")
     process_data()
+    print("Evaluating bot...")
     evaluate_bot()
